@@ -1,7 +1,7 @@
 # Executable parity contract — Rust port of Agente
 
 Status: binding. Recorded from ticket [Define the executable parity contract](../issues/03-parity-contract.md) (2026-09-24).
-Consumers: crate graph (04), JSON strategy (07), session/state (08), provider architecture (09), error/retry (10), extension host (11), RPC (12), verification harness (13), cutover (14), done-order (15), dialogs (16), input fallback (17).
+Consumers: crate graph (04), JSON strategy (07), session/state (08), provider architecture (09), error/retry (10), extension host (11), RPC (12), verification harness (13), cutover (14), done-order (15), dialogs (16), input fallback (17). Session/state strategy (08) recorded as ADR `docs/adr/0004-session-state-compat.md`; fixture corpus manifest at `.scratch/rust-port/research/session-state-fixture-corpus.md`.
 
 ## How to read this contract
 
@@ -32,7 +32,7 @@ Anchors: `cmd/agente/main.go`, `packages/agent/{cli,args,config,build,lifecycle}
 | Prompt assembly: stdin trimmed, joined with positionals by `\n`; missing prompt error per mode | E (behavior) / B (text) | stdin fixtures | `cli.go:1739-1755` |
 | Print mode: stdout = final assistant text + trailing `\n` only; all diagnostics to stderr | E framing | byte golden | `modes/print.go:61-66` |
 | Stream mode: deltas to stdout, diagnostics to stderr, trailing newline guaranteed | E framing | byte golden | `modes/stream.go:61-113` |
-| `--json` mode: one JSON object per line on stdout; fatal error appends `{"type":"error",...}`; pre-startup errors same shape | E | NDJSON goldens | `modes/json.go:13-34`, `cli.go:540-576` |
+| `--json` mode: one JSON object per line on stdout; fatal error appends `{"type":"error",...}`; pre-startup errors same shape | E (framing) / S (objects, amended ticket 07) | NDJSON shape goldens | `modes/json.go:13-34`, `cli.go:540-576` |
 | `--stats` file: JSON field names/types | S (timings normalized) | schema fixture | `cli.go:389-416` |
 | `--list-models`: dynamic-width table, `✓`, discovery-dependent | B | none | `cli.go:1769-1824` |
 | `sessions prune`: flags `--dry-run/--all/-y/--older-than/--cwd`, constraints, summary line shape | E behavior, B text | `sessionscmd_test.go` patterns | `sessionscmd.go:66-112` |
@@ -53,14 +53,14 @@ Anchors: `packages/agent/rpc.go`, `modes/json.go`, `packages/core/events.go`, `p
 
 | Surface | Bar | Verification | Anchor / notes |
 |---|---|---|---|
-| RPC framing: NDJSON both ways, blank lines skipped, 16 MiB max line, malformed JSON → `{type:"response",command:"",success:false,error:"malformed json: …"}` and continue | E | byte goldens | `rpc.go:178-192,431-474` |
-| Response envelope `{type,command,success,id?,data?,error?}`; events are raw payloads, never `id` | E | schema goldens | `rpc.go:433-473` |
-| Auth: `AGENTE_RPC_TOKEN` hello handshake; **quirk** pre-auth non-hello continues, wrong token exits; hello data `{protocol_version:1,version,provider,model}` | E | quirk fixture | `rpc.go:171-244` |
-| Methods `prompt/abort/compact/get_state/get_messages/clear/set_model/set_reasoning/get_models/ping`; request/response schemas; busy responses for mutations; abort accepted while busy | E | schema goldens + `rpc_*_test.go` | `rpc.go:245-429` |
-| `compact`: `{started:true}`, success `compact_done`, failure `error` only, **no `done` ever** (quirk) | E | quirk fixture | `rpc.go:381-401` |
+| RPC framing: NDJSON both ways, blank lines skipped, 16 MiB max line, malformed JSON → `{type:"response",command:"",success:false,error:"malformed json: …"}` and continue | E (behavior) / S (frames, amended ticket 07; error text D11) | behavior fixtures + shape goldens | `rpc.go:178-192,431-474` |
+| Response envelope `{type,command,success,id?,data?,error?}`; events are raw payloads, never `id` | S (amended ticket 07) | schema goldens | `rpc.go:433-473` |
+| Auth: `AGENTE_RPC_TOKEN` hello handshake; **quirk** pre-auth non-hello continues, wrong token exits; hello data `{protocol_version:1,version,provider,model}` | E (behavior) / S (hello data, amended ticket 07) | quirk fixture | `rpc.go:171-244` |
+| Methods `prompt/abort/compact/get_state/get_messages/clear/set_model/set_reasoning/get_models/ping`; request/response schemas; busy responses for mutations; abort accepted while busy | S (amended ticket 07) | schema goldens + `rpc_*_test.go` | `rpc.go:245-429` |
+| `compact`: `{started:true}`, success `compact_done`, failure `error` only, **no `done` ever** (quirk) | E (behavior) / S (data, amended ticket 07) | quirk fixture | `rpc.go:381-401` |
 | Lifecycle: one prompt at a time; stdin close waits in-flight turns; no cancellation on close | E | behavior fixture | `rpc.go:158-169` |
-| `--json`/RPC event schema: every `EventToJSON` type incl. `text_delta`, `tool_use_start/args/end`, `tool_call`, `tool_progress`, `tool_result`, `turn_end{stop,error?}`, `usage{…,cumulative{…}}`, content blocks | E | NDJSON goldens | `modes/json.go:39-129` |
-| Quirk: `user_prompt_submit`, `pre_compact`, `post_compact` serialize with **no payload** | E | quirk fixture | `modes/json.go` gaps |
+| `--json`/RPC event schema: every `EventToJSON` type incl. `text_delta`, `tool_use_start/args/end`, `tool_call`, `tool_progress`, `tool_result`, `turn_end{stop,error?}`, `usage{…,cumulative{…}}`, content blocks | S (amended ticket 07) | NDJSON parse goldens | `modes/json.go:39-129` |
+| Quirk: `user_prompt_submit`, `pre_compact`, `post_compact` serialize with **no payload** | S (amended ticket 07) | quirk fixture | `modes/json.go` gaps |
 | Extension frames: `hello/hello_ack/register_command/register_tool/ready/subscribe/event_intercept_response/tool_result/command_response/open_panel/panel_render/panel_close/notify/clear_notes/submit/submit_slash/shutdown_ack`, host→ext `command_invoked/tool_call/tool_cancel/event/event_intercept/panel_key/panel_close/shutdown` | E schema (field declaration order) | frame goldens | `extproto.go:29-270` |
 | Handshake: first frame must be `hello`; manifest name wins; capability `tool_cancel` exact string; `hello_ack` synchronous; **quirk: no hello deadline** | E | behavior fixtures | `manager.go:763-802` |
 | Readiness: `ready` frame; 250 ms idle auto-ready shim; 3 s `WaitForReady` deadline records diagnostic and proceeds | E behavior | timing fixtures | `manager.go:580-678,845-879` |
@@ -78,7 +78,7 @@ Anchors: `packages/agent/rpc.go`, `modes/json.go`, `packages/core/events.go`, `p
 
 Anchors: `packages/core/session*.go`, `provider/provider.go`, `provider/auth/store.go`, `agent/config.go`, `agent/settings_store.go`, `agent/skill_pins.go`, `provider/{models,usermodels,cache}.go`.
 
-All state rows: **S + Go serialization conventions** — Rust output must look like Go's (indent, trailing newline presence, compact JSONL rows, field order from Go structs) and both implementations must load each other's files. Volatile values (ids, timestamps, paths, pids, float formatting) normalized in goldens.
+All state rows: **S + Go serialization conventions** — Rust output must look like Go's (indent, trailing newline presence, compact JSONL rows, field order from Go structs) and both implementations must load each other's files. Volatile values (ids, timestamps, paths, pids, float formatting) normalized in goldens. Amended ticket 07: emission is parse-equivalent; serde_json's string escaping, float text (e.g. integral floats as `1.0`), and map key order may differ; unknown keys on write are governed by D10. Amended ticket 08: state goldens verify by **parse goldens** (Go-authored files replayed with semantic equality) plus **byte-locked micro-goldens** for serde-free quirk rows (rename `title,type`, usage double-write, six auth objects/zero `expiry`, skill-pins trailing newline) plus behavior tests (repair/prune/list/append); no full-file byte comparison. Rust→Go readability is by the S bar plus dev-only differential probing, never CI. Session determinism seams: `Clock` (`meta.started`, filename `<UTCstamp>`), `IdGen` (session id, filename uuid8). Corpus manifest: `.scratch/rust-port/research/session-state-fixture-corpus.md`; bytes generated at ticket 13.
 
 | Surface | Bar | Verification | Anchor / notes |
 |---|---|---|---|
@@ -89,12 +89,12 @@ All state rows: **S + Go serialization conventions** — Rust output must look l
 | Quirks: filename `<UTCstamp>-<uuid8>.jsonl` unrelated to `meta.id`; usage rows write cumulative into both `usage` and `cumulative`; rename row key order `title,type` | E | quirk fixtures | `session.go:98-137,406-416`, `cli.go:1000-1006` |
 | Append/rewrite rules: append-only sessions (`O_APPEND`), fresh file deleted when no messages, prune-empty on open, list sort by mtime desc, export/import stream non-meta rows verbatim | E behavior | `session_prune_test.go` | `session.go:280,611-650,722-777`, `session_portable.go` |
 | `auth.json`: top-level `anthropic,openai,kimi,google,deepseek,github_copilot,additional_api_key_creds?`; per-provider `api_key?/api_key_command?/base_url?/oauth?`; **quirk** all six objects always emitted, zero `expiry` emitted | S | parse goldens; `auth_test.go` | `auth/store.go:17-62` |
-| `auth.json` write: temp+rename, 0600; mutation rules (SetAPIKey clears command/OAuth except OpenAI; etc.); unknown fields dropped on save | E behavior | `store_additional_test.go` | `auth/store.go:155-315` |
+| `auth.json` write: temp+rename, 0600; mutation rules (SetAPIKey clears command/OAuth except OpenAI; etc.); unknown fields dropped on save (Rust preserves them, D10) | E behavior / D10 | `store_additional_test.go` | `auth/store.go:155-315` |
 | `config.json`: 31 top-level keys (not ~45); tri-state `*bool`/`*int` semantics; always-emitted `provider,model,reasoning,theme`; precedence flag > config > default | S | parse goldens; `settings_store_test.go` | `config.go:26-155` |
-| `config.json` write: `MarshalIndent` 2-space, no trailing newline, **quirk** preserves only `keymap` on save, drops unknown keys, direct (non-atomic) write | E behavior | quirk fixture | `config.go:263-277` |
+| `config.json` write: `MarshalIndent` 2-space, no trailing newline, **quirk** re-reads only `keymap` on save, drops unknown keys (Rust preserves them, D10), direct (non-atomic) write | E behavior / D10 | quirk fixture | `config.go:263-277` |
 | User `models.json`: camelCase schema, read-only, tolerant load (whole-file reject on parse error — doc claim per-block is wrong), precedence user > live > catalog, numeric zero fields don't override | S | `usermodels_test.go` | `usermodels.go:33-80,124-324` |
 | `models-cache.json`: `{fetched_at, models[]}` with **PascalCase model keys (no JSON tags)**; 6 h TTL; tmp+rename | S | parse golden (Go has none; Rust must add) | `cache.go:11-56` |
-| `skill-pins.json`: `{global[],projects{cwd[]}}` sorted, tmp `CreateTemp` 0600 + rename, trailing newline; corrupt file refused with `invalid skill-pins.json`, never overwritten | S + E behavior | `skill_pins_test.go` | `skill_pins.go:54-156` |
+| `skill-pins.json`: `{global[],projects{cwd[]}}` sorted, tmp `CreateTemp` 0600 + rename, trailing newline; corrupt file refused with `invalid skill-pins.json`, never overwritten; unknown keys preserved on save (D10) | S + E behavior / D10 | `skill_pins_test.go` | `skill_pins.go:54-156` |
 | Other writers: `update-check.json`, `bot.json` (0600), `bot.pid`, `logs/bot.log`, swarm `meta.json`/`events.jsonl`/`session.json`, consent receipts `{digest,name,version}` 0600, `kimi-cli-fallback-disabled` content `disabled\n`, gemini images into cwd | S + E behavior | per-package fixtures | see ticket 05/7/… refs; swarm section |
 | Atomicity policy: tmp+rename where Go has it, fixed `.tmp` races preserved; **no fsync, no locks** — never stronger than Go | E behavior | race fixtures | `store.go:301-315`, `skill_pins.go` |
 | File permissions: sessions 0644/0755, auth 0600, skill-pins 0600, config 0644; advisory on Windows | E (POSIX) | mode assertions skipped on Windows in Go too | `session.go:95-121` |
@@ -188,7 +188,7 @@ Copy Go's exact sentences — help, errors, warnings, dialogs, notify, `ext doct
 4. Usage rows write cumulative values into both `usage` and `cumulative`; loader derives deltas.
 5. Session filename UUID is unrelated to `meta.id`.
 6. `auth.json` always emits all six provider objects; zero `oauth.expiry` is emitted.
-7. `SaveConfig` preserves only `keymap`; unknown config keys are dropped; write is non-atomic.
+7. `SaveConfig` re-reads only `keymap` and writes non-atomically; Go drops unknown config keys (Rust preserves them, D10).
 8. `models-cache.json` uses PascalCase keys (no JSON tags).
 9. Azure legacy Chat Completions client reports name `azure-openai-responses`.
 10. `panel_resize` frame declared but never sent; `submit_slash` undocumented.
@@ -196,7 +196,7 @@ Copy Go's exact sentences — help, errors, warnings, dialogs, notify, `ext doct
 12. `--no-yolo` prints a warning and is ignored in print/stream/json/rpc.
 13. Unknown `--tools` names silently dropped; `--max-steps` accepts trailing junk (`3x`).
 14. Help omissions (`minimal`/`maximum` reasoning values, deprecated flags, internal flags) and stream-routing inconsistencies between subcommands (`ext` help → stderr, `sessions` help → stdout).
-15. `ext enable/disable` rewrites `extension.json` preserving unknown keys; file 0644.
+15. `ext enable/disable` rewrites `extension.json` preserving unknown keys; file 0644. (Go rewrites numbers through float64; Rust keeps unknown values as raw fragments — D10.)
 16. Swarm event log skips malformed lines and dedups identical adjacent events within 250 ms.
 17. Session list sorts by filesystem mtime desc, not meta timestamp.
 18. Windows: resize handler is a no-op and renderer dimensions go stale; bare-Esc resolves only after the next keystroke.
@@ -214,6 +214,9 @@ Copy Go's exact sentences — help, errors, warnings, dialogs, notify, `ext doct
 - **D7** — Retry classification is structural (Rust error types), verified against an outcome corpus; Go's error-string matching is not reproduced.
 - **D8** — PNG encode bytes are implementation-local; decodability, dimensions, and format are the bar (kitty/iTerm2/clipboard paths).
 - **D9** — No new features, no UX redesigns beyond the frozen Go behavior (charting decision).
+- **D10** — Unknown keys are preserved on whole-file state rewrites (`config.json`, `auth.json`, `skill-pins.json`, `extension.json`) as raw JSON fragments **deep**: every typed state struct that round-trips from disk (config root, auth root, each `ProviderCreds`, each `OAuthToken`, pins entries) carries a `#[serde(flatten)] BTreeMap<String, RawValue>`; known fields emit in Go declaration order, unknown fragments append after in sorted key order (ADR 0004). Go drops unknown keys in config/auth/skill-pins and rewrites extension.json numbers through float64. Sessions keep Go behavior exactly: raw-copy paths preserve unknown fields, hydrated rewrites drop them. Rust-written files remain readable by Go.
+- **D11** — JSON parse/type error text in RPC error frames comes from serde_json; the frame shape, keys, and the `malformed json: ` prefix are preserved, but Go's `encoding/json` error strings are not reproduced.
+- **D12** — serde_json parse strictness where Go is lenient: invalid UTF-8 and lone surrogate escapes error (Go replaces with U+FFFD), duplicate keys error in derived-struct decoders (Go last-wins; hand-written map-based codecs still last-win), and nesting beyond serde_json's recursion limit errors (Go tolerates far deeper). Tolerant surfaces (provider SSE chunks, session lines, extension frames) keep Go's skip/continue behavior; their skip can differ only on these pathological inputs.
 
 ## 11. Fixture and freeze protocol
 
@@ -223,3 +226,4 @@ Copy Go's exact sentences — help, errors, warnings, dialogs, notify, `ext doct
 - Any change to the oracle tree that alters the fingerprint regenerates the affected fixtures.
 - Rust tests replay committed goldens with the declared normalizer; CI is Go-free. Differential probing against a local Go binary is a dev-time option.
 - Normalization list (fixtures only): RFC3339(Nano) timestamps and zero times, random ids (`rand.Text`, UUIDs, correlation counters, agent ids), pids, absolute/machine paths, temp/log filenames, float formatting (`cost_usd`, prices), durations, base64 payload sizes.
+- Machine-JSON surfaces amended to S (ticket 07) are verified by parsing, not byte comparison; serde_json escaping, float text, and map key order are permitted to differ.
